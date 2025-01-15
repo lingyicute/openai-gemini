@@ -1,14 +1,27 @@
+const LOGS_NAMESPACE = 'LOGS_NAMESPACE';
+
 import { Buffer } from "node:buffer";
 
 export default {
-  async fetch (request) {
+  async fetch(request) {
     if (request.method === "OPTIONS") {
       return handleOPTIONS();
     }
+
     const errHandler = (err) => {
       console.error(err);
       return new Response(err.message, fixCors({ status: err.status ?? 500 }));
     };
+
+    const storeLog = async (logId, data) => {
+      try {
+        // 将请求和响应数据存储在 KV 中，以日志 ID 为 key
+        await LOGS_NAMESPACE.put(logId, JSON.stringify(data));
+      } catch (err) {
+        console.error("Error storing log:", err);
+      }
+    };
+
     try {
       const auth = request.headers.get("Authorization");
       const apiKey = auth?.split(" ")[1];
@@ -17,19 +30,60 @@ export default {
           throw new HttpError("The specified HTTP method is not allowed for the requested resource", 400);
         }
       };
+
       const { pathname } = new URL(request.url);
+      const logId = generateLogId();  // 为每个请求生成一个唯一的日志 ID
+
+      // 记录请求日志
+      const requestBody = await request.clone().json();
+      await storeLog(logId, {
+        type: 'request',
+        method: request.method,
+        pathname: pathname,
+        body: requestBody,
+        timestamp: new Date().toISOString(),
+      });
+
       switch (true) {
         case pathname.endsWith("/chat/completions"):
           assert(request.method === "POST");
           return handleCompletions(await request.json(), apiKey)
+            .then(async (response) => {
+              // 记录响应日志
+              await storeLog(logId, {
+                type: "response",
+                status: response.status,
+                body: await response.clone().text(),
+                timestamp: new Date().toISOString(),
+              });
+              return response;
+            })
             .catch(errHandler);
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
           return handleEmbeddings(await request.json(), apiKey)
+            .then(async (response) => {
+              await storeLog(logId, {
+                type: "response",
+                status: response.status,
+                body: await response.clone().text(),
+                timestamp: new Date().toISOString(),
+              });
+              return response;
+            })
             .catch(errHandler);
         case pathname.endsWith("/models"):
           assert(request.method === "GET");
           return handleModels(apiKey)
+            .then(async (response) => {
+              await storeLog(logId, {
+                type: "response",
+                status: response.status,
+                body: await response.clone().text(),
+                timestamp: new Date().toISOString(),
+              });
+              return response;
+            })
             .catch(errHandler);
         default:
           throw new HttpError("404 Not Found", 404);
@@ -38,6 +92,13 @@ export default {
       return errHandler(err);
     }
   }
+};
+
+// 生成唯一的日志 ID
+const generateLogId = () => {
+  const timestamp = Date.now();
+  const randomString = Math.random().toString(36).substring(2, 15);
+  return `${timestamp}-${randomString}`;
 };
 
 class HttpError extends Error {
