@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 export default {
-  async fetch (request) {
+  async fetch(request) {
     if (request.method === "OPTIONS") {
       return handleOPTIONS();
     }
@@ -14,30 +14,34 @@ export default {
       const apiKey = auth?.split(" ")[1];
       const assert = (success) => {
         if (!success) {
-          throw new HttpError("The specified HTTP method is not allowed for the requested resource", 400);
+          throw new HttpError(
+            "The specified HTTP method is not allowed for the requested resource",
+            400
+          );
         }
       };
       const { pathname } = new URL(request.url);
       switch (true) {
         case pathname.endsWith("/chat/completions"):
           assert(request.method === "POST");
-          return handleCompletions(await request.json(), apiKey)
-            .catch(errHandler);
+          return handleCompletions(await request.json(), apiKey).catch(
+            errHandler
+          );
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
-          return handleEmbeddings(await request.json(), apiKey)
-            .catch(errHandler);
+          return handleEmbeddings(await request.json(), apiKey).catch(
+            errHandler
+          );
         case pathname.endsWith("/models"):
           assert(request.method === "GET");
-          return handleModels(apiKey)
-            .catch(errHandler);
+          return handleModels(apiKey).catch(errHandler);
         default:
           throw new HttpError("404 Not Found", 404);
       }
     } catch (err) {
       return errHandler(err);
     }
-  }
+  },
 };
 
 class HttpError extends Error {
@@ -60,47 +64,51 @@ const handleOPTIONS = async () => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "*",
       "Access-Control-Allow-Headers": "*",
-    }
+    },
   });
 };
 
 const BASE_URL = "https://generativelanguage.googleapis.com";
 const API_VERSION = "v1beta";
 
-const API_CLIENT = "genai-js/0.21.0"; 
+const API_CLIENT = "genai-js/0.21.0";
 const makeHeaders = (apiKey, more) => ({
   "x-goog-api-client": API_CLIENT,
   ...(apiKey && { "x-goog-api-key": apiKey }),
-  ...more
+  ...more,
 });
 
-async function handleModels (apiKey) {
+async function handleModels(apiKey) {
   const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
     headers: makeHeaders(apiKey),
   });
   let { body } = response;
   if (response.ok) {
     const { models } = JSON.parse(await response.text());
-    body = JSON.stringify({
-      object: "list",
-      data: models.map(({ name }) => ({
-        id: name.replace("models/", ""),
-        object: "model",
-        created: 0,
-        owned_by: "",
-      })),
-    }, null, "  ");
+    body = JSON.stringify(
+      {
+        object: "list",
+        data: models.map(({ name }) => ({
+          id: name.replace("models/", ""),
+          object: "model",
+          created: 0,
+          owned_by: "",
+        })),
+      },
+      null,
+      "  "
+    );
   }
   return new Response(body, fixCors(response));
 }
 
 const DEFAULT_EMBEDDINGS_MODEL = "text-embedding-004";
-async function handleEmbeddings (req, apiKey) {
+async function handleEmbeddings(req, apiKey) {
   if (typeof req.model !== "string") {
     throw new HttpError("model is not specified", 400);
   }
   if (!Array.isArray(req.input)) {
-    req.input = [ req.input ];
+    req.input = [req.input];
   }
   let model;
   if (req.model.startsWith("models/")) {
@@ -109,37 +117,44 @@ async function handleEmbeddings (req, apiKey) {
     req.model = DEFAULT_EMBEDDINGS_MODEL;
     model = "models/" + req.model;
   }
-  const response = await fetch(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
-    method: "POST",
-    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      "requests": req.input.map(text => ({
-        model,
-        content: { parts: { text } },
-        outputDimensionality: req.dimensions,
-      }))
-    })
-  });
+  const response = await fetch(
+    `${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`,
+    {
+      method: "POST",
+      headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        requests: req.input.map((text) => ({
+          model,
+          content: { parts: { text } },
+          outputDimensionality: req.dimensions,
+        })),
+      }),
+    }
+  );
   let { body } = response;
   if (response.ok) {
     const { embeddings } = JSON.parse(await response.text());
-    body = JSON.stringify({
-      object: "list",
-      data: embeddings.map(({ values }, index) => ({
-        object: "embedding",
-        index,
-        embedding: values,
-      })),
-      model: req.model,
-    }, null, "  ");
+    body = JSON.stringify(
+      {
+        object: "list",
+        data: embeddings.map(({ values }, index) => ({
+          object: "embedding",
+          index,
+          embedding: values,
+        })),
+        model: req.model,
+      },
+      null,
+      "  "
+    );
   }
   return new Response(body, fixCors(response));
 }
 
 const DEFAULT_MODEL = "gemini-1.5-pro-latest";
-async function handleCompletions (req, apiKey) {
+async function handleCompletions(req, apiKey) {
   let model = DEFAULT_MODEL;
-  switch(true) {
+  switch (true) {
     case typeof req.model !== "string":
       break;
     case req.model.startsWith("models/"):
@@ -151,11 +166,13 @@ async function handleCompletions (req, apiKey) {
   }
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
-  if (req.stream) { url += "?alt=sse"; }
+  if (req.stream) {
+    url += "?alt=sse";
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify(await transformRequest(req)), // try
+    body: JSON.stringify(await transformRequest(req)),
   });
 
   let body = response.body;
@@ -164,17 +181,23 @@ async function handleCompletions (req, apiKey) {
     if (req.stream) {
       body = response.body
         .pipeThrough(new TextDecoderStream())
-        .pipeThrough(new TransformStream({
-          transform: parseStream,
-          flush: parseStreamFlush,
-          buffer: "",
-        }))
-        .pipeThrough(new TransformStream({
-          transform: toOpenAiStream,
-          flush: toOpenAiStreamFlush,
-          streamIncludeUsage: req.stream_options?.include_usage,
-          model, id, last: [],
-        }))
+        .pipeThrough(
+          new TransformStream({
+            transform: parseStream,
+            flush: parseStreamFlush,
+            buffer: "",
+          })
+        )
+        .pipeThrough(
+          new TransformStream({
+            transform: toOpenAiStream,
+            flush: toOpenAiStreamFlush,
+            streamIncludeUsage: req.stream_options?.include_usage,
+            model,
+            id,
+            last: [],
+          })
+        )
         .pipeThrough(new TextEncoderStream());
     } else {
       body = await response.text();
@@ -184,9 +207,17 @@ async function handleCompletions (req, apiKey) {
   return new Response(body, fixCors(response));
 }
 
+const transformMessages = async (messages) => {
+  return {
+    messages: messages.map((message) => ({
+      role: message.role || "user",
+      content: message.content || "",
+    })),
+  };
+};
+
 const transformRequest = async (req) => ({
-  ...await transformMessages(req.messages),
-  safetySettings,
+  ...(await transformMessages(req.messages)),
   generationConfig: transformConfig(req),
 });
 
@@ -197,55 +228,15 @@ const processCompletionsResponse = (data, model, id, req) => {
       index: cand.index || 0,
       message: {
         role: "assistant",
-        content: JSON.stringify(req),  // Insert the original inbound JSON here as the model's content.
+        content: JSON.stringify(req), // 包含入站 JSON 作为“模型的回答”
       },
       logprobs: null,
-      finish_reason: reasonsMap[cand.finishReason] || cand.finishReason,
+      finish_reason: cand.finishReason,
     })),
-    created: Math.floor(Date.now()/1000),
+    created: Math.floor(Date.now() / 1000),
     model,
     object: "chat.completion",
     usage: transformUsage(data.usageMetadata),
   };
   return JSON.stringify(responseJson, null, "  ");
 };
-
-async function toOpenAiStream (chunk, controller) {
-  const transform = transformResponseStream.bind(this);
-  const line = await chunk;
-  if (!line) { return; }
-  let data;
-  try {
-    data = JSON.parse(line);
-  } catch (err) {
-    console.error(line);
-    console.error(err);
-    const length = this.last.length || 1; 
-    const candidates = Array.from({ length }, (_, index) => ({
-      finishReason: "error",
-      content: { parts: [{ text: err }] },
-      index,
-    }));
-    data = { candidates };
-  }
-  const cand = data.candidates[0];
-  console.assert(data.candidates.length === 1, "Unexpected candidates count: %d", data.candidates.length);
-  cand.index = cand.index || 0; 
-  if (!this.last[cand.index]) {
-    controller.enqueue(transform(data, false, "first"));
-  }
-  this.last[cand.index] = data;
-  if (cand.content) { 
-    controller.enqueue(transform(data));
-  }
-}
-
-async function toOpenAiStreamFlush (controller) {
-  const transform = transformResponseStream.bind(this);
-  if (this.last.length > 0) {
-    for (const data of this.last) {
-      controller.enqueue(transform(data, "stop"));
-    }
-    controller.enqueue("data: [DONE]" + delimiter);
-  }
-}
