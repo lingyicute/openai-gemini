@@ -169,42 +169,10 @@ async function handleCompletions(req, apiKey) {
   if (req.stream) {
     url += "?alt=sse";
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify(await transformRequest(req)),
-  });
-
-  let body = response.body;
-  if (response.ok) {
-    let id = generateChatcmplId();
-    if (req.stream) {
-      body = response.body
-        .pipeThrough(new TextDecoderStream())
-        .pipeThrough(
-          new TransformStream({
-            transform: parseStream,
-            flush: parseStreamFlush,
-            buffer: "",
-          })
-        )
-        .pipeThrough(
-          new TransformStream({
-            transform: toOpenAiStream,
-            flush: toOpenAiStreamFlush,
-            streamIncludeUsage: req.stream_options?.include_usage,
-            model,
-            id,
-            last: [],
-          })
-        )
-        .pipeThrough(new TextEncoderStream());
-    } else {
-      body = await response.text();
-      body = processCompletionsResponse(JSON.parse(body), model, id, req);
-    }
-  }
-  return new Response(body, fixCors(response));
+  // Directly respond with the transformed request data
+  const id = generateChatcmplId();
+  const responseJson = processCompletionsResponse({}, model, id, req);
+  return new Response(responseJson, fixCors({ status: 200 }));
 }
 
 const transformMessages = async (messages) => {
@@ -217,7 +185,6 @@ const transformMessages = async (messages) => {
 };
 
 const transformConfig = (req) => {
-  // Converts generation configuration into the format required by the model
   return {
     temperature: req.temperature ?? 0.7,
     top_p: req.top_p ?? 1.0,
@@ -225,27 +192,31 @@ const transformConfig = (req) => {
   };
 };
 
-const transformRequest = async (req) => ({
-  ...(await transformMessages(req.messages)),
-  generationConfig: transformConfig(req),
-});
-
 const processCompletionsResponse = (data, model, id, req) => {
-  const responseJson = {
-    id,
-    choices: data.candidates.map((cand) => ({
-      index: cand.index || 0,
-      message: {
-        role: "assistant",
-        content: JSON.stringify(req), // 包含入站 JSON 作为“模型的回答”
-      },
-      logprobs: null,
-      finish_reason: cand.finishReason,
-    })),
-    created: Math.floor(Date.now() / 1000),
-    model,
-    object: "chat.completion",
-    usage: transformUsage(data.usageMetadata),
-  };
-  return JSON.stringify(responseJson, null, "  ");
+  return JSON.stringify(
+    {
+      id,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: JSON.stringify(req, null, 2), // Embed the inbound JSON in the OpenAI-compliant response
+          },
+          logprobs: null,
+          finish_reason: "stop",
+        },
+      ],
+      created: Math.floor(Date.now() / 1000),
+      model,
+      object: "chat.completion",
+      usage: null, // No usage data is available in this mock response
+    },
+    null,
+    2
+  );
+};
+
+const generateChatcmplId = () => {
+  return "chatcmpl-" + Math.random().toString(36).substring(2, 15);
 };
