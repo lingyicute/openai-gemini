@@ -24,14 +24,10 @@ export default {
       switch (true) {
         case pathname.endsWith("/chat/completions"):
           assert(request.method === "POST");
-          return handleCompletions(await request.json(), apiKey).catch(
-            errHandler
-          );
+          return handleCompletions(await request.json(), apiKey).catch(errHandler);
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
-          return handleEmbeddings(await request.json(), apiKey).catch(
-            errHandler
-          );
+          return handleEmbeddings(await request.json(), apiKey).catch(errHandler);
         case pathname.endsWith("/models"):
           assert(request.method === "GET");
           return handleModels(apiKey).catch(errHandler);
@@ -169,6 +165,7 @@ async function handleCompletions(req, apiKey) {
   if (req.stream) {
     url += "?alt=sse";
   }
+
   // Generate a unique ID for the response
   const id = generateChatcmplId();
   const responseJson = processCompletionsResponse({}, model, id, req);
@@ -193,8 +190,10 @@ const transformConfig = (req) => {
 };
 
 const processCompletionsResponse = (data, model, id, req) => {
-  // Embed inbound JSON in a Markdown code block
-  const formattedContent = `\`\`\`json\n${JSON.stringify(req, null, 2)}\n\`\`\``;
+  const promptTokens = countTokens(req.messages);
+  const completionTokens = 7; // You can estimate this based on the expected response size
+  const totalTokens = promptTokens + completionTokens;
+
   return JSON.stringify(
     {
       id,
@@ -203,7 +202,7 @@ const processCompletionsResponse = (data, model, id, req) => {
           index: 0,
           message: {
             role: "assistant",
-            content: formattedContent, // Use Markdown code block
+            content: JSON.stringify(req, null, 2), // Return the input request as response
           },
           logprobs: null,
           finish_reason: "stop",
@@ -212,7 +211,16 @@ const processCompletionsResponse = (data, model, id, req) => {
       created: Math.floor(Date.now() / 1000),
       model,
       object: "chat.completion",
-      usage: null, // No usage data is available in this mock response
+      usage: {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        completion_tokens_details: {
+          reasoning_tokens: 0,
+          accepted_prediction_tokens: 0,
+          rejected_prediction_tokens: 0,
+        },
+      },
     },
     null,
     2
@@ -221,4 +229,13 @@ const processCompletionsResponse = (data, model, id, req) => {
 
 const generateChatcmplId = () => {
   return "chatcmpl-" + Math.random().toString(36).substring(2, 15);
+};
+
+// Simple token counting function (this can be enhanced)
+const countTokens = (messages) => {
+  let tokens = 0;
+  messages.forEach((message) => {
+    tokens += message.content.length; // Rough estimate by counting characters
+  });
+  return tokens;
 };
