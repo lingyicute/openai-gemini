@@ -260,3 +260,103 @@ const transformCandidates = (key, cand) => ({
     role: "assistant",
     content: cand.content?.parts.map(p => p.text).join(SEP) },
   finish_reason: cand.finishReason
+  });
+
+const transformCandidatesMessage = transformCandidates.bind(null, "message");
+const transformCandidatesDelta = transformCandidates.bind(null, "delta");
+
+const transformUsage = (data) => ({
+  completion_tokens: data.candidatesTokenCount,
+  prompt_tokens: data.promptTokenCount,
+  total_tokens: data.totalTokenCount
+});
+
+const processCompletionsResponse = (data, model, id) => {
+  return JSON.stringify({
+    id,
+    choices: data.candidates.map(transformCandidatesMessage),
+    created: Math.floor(Date.now()/1000),
+    model,
+    object: "chat.completion",
+    usage: transformUsage(data.usageMetadata),
+  });
+};
+
+const responseLineRE = /^data: (.*)(?:\n\n|\r\r|\r\n\r\n)/;
+async function parseStream(chunk, controller) {
+  chunk = await chunk;
+  if (!chunk) { return; }
+  this.buffer += chunk;
+  do {
+    const match = this.buffer.match(responseLineRE);
+    if (!match) { break; }
+    controller.enqueue(match[1]);
+    this.buffer = this.buffer.substring(match[0].length);
+  } while (true);
+}
+
+async function parseStreamFlush(controller) {
+  if (this.buffer) {
+    console.error("Invalid data:", this.buffer);
+    controller.enqueue(this.buffer);
+  }
+}
+
+function transformResponseStream(data, stop, first) {
+  const item = transformCandidatesDelta(data.candidates[0]);
+  if (stop) { item.delta = {}; } else { item.finish_reason = null; }
+  if (first) { item.delta.content = ""; } else { delete item.delta.role; }
+  const output = {
+    id: this.id,
+    choices: [item],
+    created: Math.floor(Date.now()/1000),
+    model: this.model,
+    object: "chat.completion.chunk",
+  };
+  if (data.usageMetadata && this.streamIncludeUsage) {
+    output.usage = stop ? transformUsage(data.usageMetadata) : null;
+  }
+  return "data: " + JSON.stringify(output) + delimiter;
+}
+
+const delimiter = "\n\n";
+
+async function toOpenAiStream(chunk, controller) {
+  const transform = transformResponseStream.bind(this);
+  const line = await chunk;
+  if (!line) { return; }
+  let data;
+  try {
+    data = JSON.parse(line);
+  } catch (err) {
+    console.error(line);
+    console.error(err);
+    const length = this.last.length || 1; // at least 1 error msg
+    const candidates = Array.from({ length }, (_, index) => ({
+      finishReason: "error",
+      content: { parts: [{ text: err }] },
+      index,
+    }));
+    data = { candidates };
+  }
+  const cand = data.candidates[0];
+  console.assert(data.candidates.length === 1, "Unexpected candidates count: %d", data.candidates.length);
+  cand.index = cand.index || 0; // absent in new -002 models response
+  if (!this.last[cand.index]) {
+    controller.enqueue(transform(data, false, "first"));
+  }
+  this.last[cand.index] = data;
+  if (cand.content) { // prevent empty data (e.g. when MAX_TOKENS)
+    controller.enqueue(transform(data));
+  }
+}
+
+async function toOpenAiStreamFlush(controller) {
+  const transform = transformResponseStream.bind(this);
+  if (this.last.length > 0) {
+    for (const data of this.last) {
+      controller.enqueue(transform(data, "stop"));
+    }
+    controller.enqueue("data: [DONE]" + delimiter);
+  }
+}
