@@ -55,6 +55,8 @@ class HttpError extends Error {
 const fixCors = ({ headers, status, statusText }) => {
   headers = new Headers(headers);
   headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Methods", "*");
+  headers.set("Access-Control-Allow-Headers", "*");
   return { headers, status, statusText };
 };
 
@@ -165,51 +167,31 @@ async function handleCompletions(req, apiKey) {
       model = req.model;
   }
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
-  let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
-  if (req.stream) {
-    url += "?alt=sse";
-  }
-  // Directly respond with the transformed request data
   const id = generateChatcmplId();
+  const url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
+
+  // Process the request and embed the inbound JSON
   const responseJson = processCompletionsResponse({}, model, id, req);
   return new Response(responseJson, fixCors({ status: 200 }));
 }
-
-const transformMessages = async (messages) => {
-  return {
-    messages: messages.map((message) => ({
-      role: message.role || "user",
-      content: message.content || "",
-    })),
-  };
-};
-
-const transformConfig = (req) => {
-  return {
-    temperature: req.temperature ?? 0.7,
-    top_p: req.top_p ?? 1.0,
-    max_tokens: req.max_tokens ?? 256,
-  };
-};
 
 const processCompletionsResponse = (data, model, id, req) => {
   return JSON.stringify(
     {
       id,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model,
       choices: [
         {
           index: 0,
           message: {
             role: "assistant",
-            content: JSON.stringify(req, null, 2), // Embed the inbound JSON in the OpenAI-compliant response
+            content: JSON.stringify(req, null, 2), // Embed the inbound JSON in OpenAI-compliant response
           },
-          logprobs: null,
           finish_reason: "stop",
         },
       ],
-      created: Math.floor(Date.now() / 1000),
-      model,
-      object: "chat.completion",
       usage: null, // No usage data is available in this mock response
     },
     null,
