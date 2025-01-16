@@ -216,6 +216,15 @@ const transformMessages = async (messages) => {
   };
 };
 
+const transformConfig = (req) => {
+  // Converts generation configuration into the format required by the model
+  return {
+    temperature: req.temperature ?? 0.7,
+    top_p: req.top_p ?? 1.0,
+    max_tokens: req.max_tokens ?? 256,
+  };
+};
+
 const transformRequest = async (req) => ({
   ...(await transformMessages(req.messages)),
   generationConfig: transformConfig(req),
