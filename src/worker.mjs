@@ -7,10 +7,7 @@ export default {
     }
     const errHandler = (err) => {
       console.error(err);
-      return new Response(
-        JSON.stringify({ error: err.message }),
-        fixCors({ status: err.status ?? 500 })
-      );
+      return new Response(err.message, fixCors({ status: err.status ?? 500 }));
     };
     try {
       const auth = request.headers.get("Authorization");
@@ -55,12 +52,10 @@ class HttpError extends Error {
   }
 }
 
-const fixCors = ({ headers = {}, status, statusText }) => {
-  const fixedHeaders = new Headers(headers);
-  fixedHeaders.set("Access-Control-Allow-Origin", "*");
-  fixedHeaders.set("Access-Control-Allow-Methods", "*");
-  fixedHeaders.set("Access-Control-Allow-Headers", "*");
-  return { headers: fixedHeaders, status, statusText };
+const fixCors = ({ headers, status, statusText }) => {
+  headers = new Headers(headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  return { headers, status, statusText };
 };
 
 const handleOPTIONS = async () => {
@@ -104,7 +99,7 @@ async function handleModels(apiKey) {
       "  "
     );
   }
-  return new Response(body, fixCors({ headers: response.headers }));
+  return new Response(body, fixCors(response));
 }
 
 const DEFAULT_EMBEDDINGS_MODEL = "text-embedding-004";
@@ -153,7 +148,7 @@ async function handleEmbeddings(req, apiKey) {
       "  "
     );
   }
-  return new Response(body, fixCors({ headers: response.headers }));
+  return new Response(body, fixCors(response));
 }
 
 const DEFAULT_MODEL = "gemini-1.5-pro-latest";
@@ -170,28 +165,53 @@ async function handleCompletions(req, apiKey) {
       model = req.model;
   }
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
+  let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
+  if (req.stream) {
+    url += "?alt=sse";
+  }
+  // Generate a unique ID for the response
   const id = generateChatcmplId();
   const responseJson = processCompletionsResponse({}, model, id, req);
-  return new Response(responseJson, fixCors({}));
+  return new Response(responseJson, fixCors({ status: 200 }));
 }
 
+const transformMessages = async (messages) => {
+  return {
+    messages: messages.map((message) => ({
+      role: message.role || "user",
+      content: message.content || "",
+    })),
+  };
+};
+
+const transformConfig = (req) => {
+  return {
+    temperature: req.temperature ?? 0.7,
+    top_p: req.top_p ?? 1.0,
+    max_tokens: req.max_tokens ?? 256,
+  };
+};
+
 const processCompletionsResponse = (data, model, id, req) => {
+  // Embed inbound JSON in a Markdown code block
+  const formattedContent = `\`\`\`json\n${JSON.stringify(req, null, 2)}\n\`\`\``;
   return JSON.stringify(
     {
       id,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model,
       choices: [
         {
           index: 0,
           message: {
             role: "assistant",
-            content: JSON.stringify(req, null, 2), // Ensure `req` is JSON stringified
+            content: formattedContent, // Use Markdown code block
           },
+          logprobs: null,
           finish_reason: "stop",
         },
       ],
+      created: Math.floor(Date.now() / 1000),
+      model,
+      object: "chat.completion",
       usage: null, // No usage data is available in this mock response
     },
     null,
